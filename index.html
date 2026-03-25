@@ -11,15 +11,17 @@
     <style>
         @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Noto+Sans+SC:wght@300;500;900&display=swap');
         :root { --accent: #00ff41; --bg: #0a0a0a; }
-        body { background-color: var(--bg); color: #e0e0e0; font-family: 'Noto Sans SC', sans-serif; margin: 0; }
+        body { background-color: var(--bg); color: #e0e0e0; font-family: 'Noto Sans SC', sans-serif; margin: 0; padding: 0; }
         .mono { font-family: 'JetBrains Mono', monospace; }
-        .glass { background: rgba(255, 255, 255, 0.03); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 20px; }
-        .accent-glow { box-shadow: 0 0 20px rgba(0, 255, 65, 0.2); }
+        .glass { background: rgba(255, 255, 255, 0.03); backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 24px; }
+        .accent-glow { box-shadow: 0 0 30px rgba(0, 255, 65, 0.15); }
         textarea:focus { outline: none; border-color: var(--accent) !important; }
         .hide-scroll::-webkit-scrollbar { display: none; }
+        @keyframes slideUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+        .animate-slide-up { animation: slideUp 0.6s cubic-bezier(0.22, 1, 0.36, 1) forwards; }
     </style>
 </head>
-<body>
+<body class="hide-scroll">
     <div id="root"></div>
 
     <!-- Firebase SDK (UMD) -->
@@ -29,23 +31,26 @@
 
     <script type="text/babel">
         // ############################################################
-        // 关键：请在此处填入你的真实配置
+        // 配置注入：已根据你的提供完成替换
         // ############################################################
         const firebaseConfig = {
-            apiKey: "AIzaSyDoaqc3o1eWZdMEGqLNc8DLbVAVqultvv0",
-            authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
-            projectId: "YOUR_PROJECT_ID",
-            storageBucket: "YOUR_PROJECT_ID.appspot.com",
-            messagingSenderId: "YOUR_SENDER_ID",
-            appId: "YOUR_APP_ID"
+            apiKey: "AlzaSyBnRKitQGBXOu8k4COtDTILYxCJuMf7xzE",
+            authDomain: "exchange-rates-adcf6.firebaseapp.com",
+            projectId: "exchange-rates-adcf6",
+            storageBucket: "exchange-rates-adcf6.firebasestorage.app",
+            messagingSenderId: "875614679042",
+            appId: "1:875614679042:web:5813c3e70a33e91ba0371b"
         };
-        const GEMINI_API_KEY = "YOUR_GEMINI_API_KEY";
+        
+        // 关键：请在此处填入你从 Google AI Studio 获取的 Gemini API Key
+        const GEMINI_API_KEY = "在此填入你的_GEMINI_API_KEY";
+
+        const APP_ID = "dh1q-protocol-prod-v3";
 
         // 初始化
         firebase.initializeApp(firebaseConfig);
         const auth = firebase.auth();
         const db = firebase.firestore();
-        const appId = "dh1q-protocol-prod";
 
         const { useState, useEffect, useMemo } = React;
 
@@ -64,21 +69,40 @@
             );
         };
 
-        function App() {
+        const cleanJSON = (text) => {
+            try {
+                const cleaned = text.replace(/```json/g, '').replace(/```/g, '').trim();
+                return JSON.parse(cleaned);
+            } catch (e) {
+                console.error("JSON解析失败:", e);
+                return null;
+            }
+        };
+
+        const isURL = (str) => {
+            try {
+                const url = new URL(str.trim());
+                return url.hostname.includes('threads.net');
+            } catch {
+                return false;
+            }
+        };
+
+        const App = () => {
             const [activeTab, setActiveTab] = useState('capture');
             const [inputText, setInputText] = useState('');
             const [posts, setPosts] = useState([]);
             const [isAnalyzing, setIsAnalyzing] = useState(false);
             const [script, setScript] = useState(null);
-            const [selectedPost, setSelectedPost] = useState(null);
+            const [error, setError] = useState(null);
 
             useEffect(() => {
-                auth.signInAnonymously().catch(console.error);
-                const unsubscribe = db.collection('artifacts').doc(appId).collection('threads_posts')
+                auth.signInAnonymously().catch(err => setError(`认证失败: ${err.message}`));
+                const unsubscribe = db.collection('artifacts').doc(APP_ID).collection('threads_posts')
                     .onSnapshot(snapshot => {
                         const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
                         setPosts(data.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0)));
-                    });
+                    }, err => setError(`数据库连接失败: ${err.message}`));
                 return () => unsubscribe();
             }, []);
 
@@ -91,126 +115,175 @@
             const handleAnalyze = async () => {
                 if (!inputText.trim()) return;
                 setIsAnalyzing(true);
+                setError(null);
+                const isLink = isURL(inputText);
+
                 try {
-                    const prompt = `你是一位高阶内容导演。分析以下Threads串文，提取3个标签，提炼逻辑，并提供一个带有 **关键词** (加双星号) 标注的电影感拍摄建议(match)。必须使用简体中文。内容: ${inputText}`;
+                    const prompt = isLink 
+                        ? `访问此 Threads 链接并提取正文：${inputText.trim()}。进行高阶创作分析。`
+                        : `分析此观点内容：${inputText.trim()}`;
+
+                    const systemPrompt = `你是一位拥有高级审美思维的内容导演。
+                    要求：
+                    1. 输出简体中文 JSON：{ "content": "提取的正文", "tags": ["标签1", "标签2"], "logic": "底层逻辑提炼", "match": "分镜建议" }。
+                    2. match 字段需提供具有电影感的【高阶分镜建议】，使用 **关键词** (双星号) 标注动作、道具或光影。
+                    3. 去标签化：不要机械绑定法考/健身等身份。身份（法考、健身、3D打印、骑行、车辆、文山生活）应作为背景资产灵活调用，建议应超越身份标签，追求视觉张力与对冲美学。
+                    4. 所有的中文输出必须为简体中文。`;
+
                     const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${GEMINI_API_KEY}`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
                             contents: [{ parts: [{ text: prompt }] }],
+                            systemInstruction: { parts: [{ text: systemPrompt }] },
+                            tools: isLink ? [{ "google_search": {} }] : [],
                             generationConfig: { responseMimeType: "application/json" }
                         })
                     });
-                    const result = await response.json();
-                    const analysis = JSON.parse(result.candidates[0].content.parts[0].text);
 
-                    await db.collection('artifacts').doc(appId).collection('threads_posts').add({
-                        content: inputText,
+                    const resData = await response.json();
+                    if (resData.error) throw new Error(resData.error.message);
+
+                    const analysis = cleanJSON(resData.candidates[0].content.parts[0].text);
+                    if (!analysis) throw new Error("AI 数据解析失败");
+
+                    await db.collection('artifacts').doc(APP_ID).collection('threads_posts').add({
+                        content: analysis.content || inputText,
                         tags: analysis.tags || [],
                         logic: analysis.logic || "",
                         match: analysis.match || "",
                         createdAt: firebase.firestore.FieldValue.serverTimestamp()
                     });
+
                     setInputText('');
                     setActiveTab('library');
                 } catch (e) {
-                    alert("分析异常，请检查 API 配置或网络");
+                    setError(`操作失败: ${e.message}`);
                 } finally { setIsAnalyzing(false); }
             };
 
             const generateScript = async (post) => {
-                setSelectedPost(post);
-                setScript("正在锻造脚本...");
+                setScript("正在锻造高阶脚本...");
                 setActiveTab('script');
                 try {
                     const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${GEMINI_API_KEY}`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
-                            contents: [{ parts: [{ text: `为这段观点生成20秒硬核转场脚本，用**双星号**标注视觉重点。观点: ${post.content}` }] }]
+                            contents: [{ parts: [{ text: `基于以下观点，生成 20s Casey Neistat 风格硬核脚本，用简体中文，句子短促有力，用 **关键词** 标注视觉重心：${post.content}` }] }]
                         })
                     });
-                    const res = await response.json();
-                    setScript(res.candidates[0].content.parts[0].text);
-                } catch (e) { setScript("生成失败"); }
+                    const resData = await response.json();
+                    setScript(resData.candidates[0].content.parts[0].text);
+                } catch (e) { setScript("脚本生成失败，请检查网络。"); }
             };
 
             return (
-                <div className="min-h-screen flex flex-col max-w-4xl mx-auto px-4 py-8">
-                    <header className="mb-12 flex justify-between items-end border-b border-white/10 pb-6">
+                <div className="min-h-screen max-w-4xl mx-auto px-4 py-12 flex flex-col">
+                    <header className="mb-16 flex flex-col md:flex-row justify-between items-start md:items-end gap-6 border-b border-white/5 pb-8">
                         <div>
-                            <h1 className="text-4xl font-black italic tracking-tighter text-[#00ff41]">DH1Q PROTOCOL</h1>
-                            <p className="mono text-[10px] text-zinc-600 mt-2 uppercase tracking-widest">Creator's Production OS</p>
+                            <h1 className="text-5xl font-black italic tracking-tighter text-[#00ff41] leading-none">DH1Q PROTOCOL</h1>
+                            <p className="mono text-[10px] text-zinc-600 mt-4 uppercase tracking-[0.4em] italic">The Creator's OS v3.0</p>
                         </div>
-                        <nav className="flex gap-6 mono text-xs">
+                        <nav className="flex gap-8 mono text-[10px] font-black tracking-widest uppercase">
                             {['capture', 'library', 'script'].map(t => (
-                                <button key={t} onClick={() => setActiveTab(t)} className={`uppercase font-bold transition-all ${activeTab === t ? 'text-[#00ff41] border-b-2 border-[#00ff41]' : 'text-zinc-600'}`}>
-                                    {t === 'capture' ? '捕获' : t === 'library' ? '灵感库' : '生产'}
+                                <button key={t} onClick={() => setActiveTab(t)} className={`transition-all ${activeTab === t ? 'text-[#00ff41] border-b-2 border-[#00ff41] pb-1' : 'text-zinc-600 hover:text-white'}`}>
+                                    {t === 'capture' ? '捕获' : t === 'library' ? '仓库' : '生产'}
                                 </button>
                             ))}
                         </nav>
                     </header>
 
-                    {activeTab === 'capture' && (
-                        <div className="space-y-8 animate-in fade-in">
-                            <div className="glass p-8 accent-glow">
-                                <textarea 
-                                    className="w-full h-48 bg-transparent border-none text-xl placeholder:text-zinc-800 resize-none font-medium leading-relaxed"
-                                    placeholder="在此倾倒你的灵感或粘贴链接..."
-                                    value={inputText}
-                                    onChange={(e) => setInputText(e.target.value)}
-                                />
-                                <button onClick={handleAnalyze} disabled={isAnalyzing} className="w-full py-5 bg-[#00ff41] text-black font-black rounded-2xl mt-6 uppercase tracking-widest text-sm active:scale-95 transition-all">
-                                    {isAnalyzing ? "正在进行高阶内化..." : "一键分析并存入仓库"}
-                                </button>
-                            </div>
+                    {error && (
+                        <div className="mb-8 p-4 bg-red-900/20 border border-red-500/50 text-red-400 text-xs rounded-2xl flex justify-between items-center animate-slide-up">
+                            <span><strong>SYSTEM ERROR:</strong> {error}</span>
+                            <button onClick={() => setError(null)} className="font-bold">✕</button>
                         </div>
                     )}
 
-                    {activeTab === 'library' && (
-                        <div className="space-y-8 animate-in fade-in">
-                            {tagStats.length > 0 && (
-                                <div className="flex flex-wrap gap-2">
-                                    {tagStats.map(([t, c]) => (
-                                        <div key={t} className="bg-zinc-900 px-3 py-1 rounded-full text-[10px] font-bold border border-white/5">
-                                            {t} <span className="text-[#00ff41] ml-1">{c}</span>
+                    <main className="flex-1">
+                        {activeTab === 'capture' && (
+                            <div className="animate-slide-up">
+                                <div className="glass p-8 accent-glow relative group">
+                                    <textarea 
+                                        className="w-full h-56 bg-transparent border-none text-2xl placeholder:text-zinc-900 resize-none font-medium leading-relaxed"
+                                        placeholder="粘贴内容 或 Threads 链接..."
+                                        value={inputText}
+                                        onChange={(e) => setInputText(e.target.value)}
+                                    ></textarea>
+                                    <button 
+                                        onClick={handleAnalyze} 
+                                        disabled={isAnalyzing || !inputText.trim()}
+                                        className="w-full py-6 bg-[#00ff41] text-black font-black rounded-3xl mt-8 uppercase tracking-[0.2em] text-xs hover:brightness-110 active:scale-[0.98] transition-all disabled:opacity-20"
+                                    >
+                                        {isAnalyzing ? "正在进行高阶逻辑内化..." : "一键分析并存入仓库"}
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+
+                        {activeTab === 'library' && (
+                            <div className="animate-slide-up space-y-10">
+                                {tagStats.length > 0 && (
+                                    <section className="glass p-6 bg-white/5 border-white/5">
+                                        <div className="text-[10px] font-black text-zinc-600 uppercase tracking-[0.3em] mb-4 italic">Tag Analytics</div>
+                                        <div className="flex flex-wrap gap-3">
+                                            {tagStats.map(([t, c]) => (
+                                                <div key={t} className="bg-zinc-900 px-4 py-2 rounded-full border border-white/5 flex items-center">
+                                                    <span className="text-xs font-bold text-zinc-400">{t}</span>
+                                                    <span className="ml-3 bg-[#00ff41] text-black text-[9px] font-black w-5 h-5 flex items-center justify-center rounded-full">{c}</span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </section>
+                                )}
+
+                                <div className="grid grid-cols-1 gap-8">
+                                    {posts.map(p => (
+                                        <div key={p.id} className="glass p-8 border-white/5 hover:border-[#00ff41]/30 transition-all">
+                                            <div className="flex flex-wrap gap-2 mb-6">
+                                                {p.tags?.map(t => <span key={t} className="text-[9px] text-[#00ff41] border border-[#00ff41]/30 px-3 py-1 rounded-full uppercase font-black">{t}</span>)}
+                                            </div>
+                                            <p className="text-xl leading-relaxed text-zinc-200 mb-8 font-light italic">"{p.content}"</p>
+                                            <div className="bg-white/[0.02] p-6 rounded-3xl border border-white/5 mb-8">
+                                                <div className="text-[10px] font-black text-[#00ff41] mb-4 uppercase italic tracking-widest">Director's Vision / 导演方案</div>
+                                                <p className="text-base text-zinc-400 leading-loose"><HighlightText text={p.match} /></p>
+                                            </div>
+                                            <div className="flex justify-between items-center border-t border-white/5 pt-6">
+                                                <button onClick={() => db.collection('artifacts').doc(APP_ID).collection('threads_posts').doc(p.id).delete()} className="text-[10px] text-zinc-700 hover:text-red-500 font-bold uppercase mono tracking-tighter transition-colors">Remove</button>
+                                                <button onClick={() => generateScript(p)} className="bg-white text-black px-8 py-3 rounded-full text-[10px] font-black uppercase tracking-widest hover:bg-[#00ff41] transition-all">生成生产脚本</button>
+                                            </div>
                                         </div>
                                     ))}
                                 </div>
-                            )}
-                            <div className="grid grid-cols-1 gap-6">
-                                {posts.map(p => (
-                                    <div key={p.id} className="glass p-6 border-white/5 hover:border-[#00ff41]/30 transition-all">
-                                        <div className="flex gap-2 mb-4">
-                                            {p.tags?.map(t => <span key={t} className="text-[10px] text-[#00ff41] border border-[#00ff41]/20 px-2 py-0.5 rounded-full uppercase font-black">{t}</span>)}
-                                        </div>
-                                        <p className="text-zinc-300 mb-6 italic">"{p.content}"</p>
-                                        <div className="bg-white/5 p-5 rounded-xl mb-6">
-                                            <div className="text-[10px] font-black text-[#00ff41] mb-2 uppercase">Directorial Vision</div>
-                                            <p className="text-sm leading-relaxed"><HighlightText text={p.match} /></p>
-                                        </div>
-                                        <div className="flex justify-between items-center border-t border-white/5 pt-4">
-                                            <button onClick={() => db.collection('artifacts').doc(appId).collection('threads_posts').doc(p.id).delete()} className="text-[10px] text-zinc-600 hover:text-red-500">REMOVE</button>
-                                            <button onClick={() => generateScript(p)} className="bg-white text-black px-4 py-1.5 rounded-full text-[10px] font-black uppercase">生成执行脚本</button>
-                                        </div>
-                                    </div>
-                                ))}
                             </div>
-                        </div>
-                    )}
+                        )}
 
-                    {activeTab === 'script' && (
-                        <div className="glass p-8 animate-in fade-in">
-                            <h2 className="text-sm font-black text-[#00ff41] mb-6 uppercase tracking-widest border-b border-white/5 pb-4">Production Script</h2>
-                            <div className="prose prose-invert max-w-none text-base leading-loose">
-                                <HighlightText text={script || "请从灵感库选择内容进行锻造。"} />
+                        {activeTab === 'script' && (
+                            <div className="animate-slide-up">
+                                <div className="glass p-10 md:p-16 border-[#00ff41]/10">
+                                    <h2 className="text-xs font-black text-[#00ff41] mb-12 uppercase tracking-[0.5em] border-b border-white/5 pb-6 italic">Production Script</h2>
+                                    <div className="prose prose-invert max-w-none text-lg leading-relaxed font-light text-zinc-300">
+                                        <HighlightText text={script || "请先在仓库中选择内容。"} />
+                                    </div>
+                                    {script && script.length > 20 && (
+                                        <div className="mt-16 flex gap-6">
+                                            <button onClick={() => window.print()} className="flex-1 py-5 bg-[#00ff41] text-black font-black rounded-[2rem] uppercase tracking-widest text-xs active:scale-95 transition-all shadow-xl">导出拍摄指南 (PDF)</button>
+                                            <button onClick={() => setActiveTab('library')} className="px-10 py-5 bg-white/5 text-zinc-500 font-black rounded-[2rem] text-xs uppercase border border-white/5">返回灵感库</button>
+                                        </div>
+                                    )}
+                                </div>
                             </div>
-                            {script && <button onClick={() => window.print()} className="w-full py-4 border border-[#00ff41] text-[#00ff41] font-bold rounded-xl mt-12 uppercase tracking-widest text-xs">导出拍摄指南</button>}
-                        </div>
-                    )}
+                        )}
+                    </main>
+                    <div className="fixed top-0 left-0 w-full h-full pointer-events-none z-[-1] overflow-hidden opacity-30">
+                        <div className="absolute top-[-20%] left-[-20%] w-[60%] h-[60%] bg-[#00ff41]/10 blur-[180px] rounded-full"></div>
+                        <div className="absolute bottom-[-20%] right-[-20%] w-[60%] h-[60%] bg-blue-500/5 blur-[180px] rounded-full"></div>
+                    </div>
                 </div>
             );
-        }
+        };
+
         const root = ReactDOM.createRoot(document.getElementById('root'));
         root.render(<App />);
     </script>
